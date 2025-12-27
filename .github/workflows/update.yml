@@ -1,4 +1,4 @@
-name: Update Whitelist
+name: Update DNS Rewrite Filters
 
 on:
   workflow_dispatch:
@@ -15,16 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Process Whitelist
+      - name: Process Filters
         shell: python
         run: |
           import requests
           
-          # Источник (hosts-файл)
+          # Источник (hosts-файл с IP прокси сервера)
           source_url = "https://raw.githubusercontent.com/ImMALWARE/dns.malw.link/refs/heads/master/hosts"
-          # Сервисы для белого списка
-          target_keywords = ["OpenAI", "Google", "Grok", "Claude"]
-          output_file = "my_whitelist.txt"
+          # Ключевые слова для поиска нужных сервисов
+          target_keywords = ["OpenAI", "Google", "Grok", "Claude", "xAI"]
+          output_file = "my_filters.txt"
           
           print(f"Загружаю данные из {source_url}...")
           r = requests.get(source_url)
@@ -35,56 +35,55 @@ jobs:
           lines = r.text.splitlines()
           result = []
           active = False
-          unique_domains = set() # Чтобы не было дублей
+          count = 0
           
-          print(f"Всего строк в источнике: {len(lines)}")
-          print("--- Начинаю поиск разделов ---")
+          print("--- Начинаю парсинг разделов ---")
 
           for line in lines:
               s = line.strip()
               if not s: continue
               
-              # Поиск заголовков в hosts (начинаются с #)
+              # Если строка — заголовок раздела (начинается с #)
               if s.startswith("#"):
-                  found_keyword = None
-                  for k in target_keywords:
-                      if k.lower() in s.lower():
-                          found_keyword = k
-                          break
-                  
-                  if found_keyword:
+                  is_target = any(k.lower() in s.lower() for k in target_keywords)
+                  if is_target:
                       active = True
-                      print(f"Включен захват для раздела: {s}")
+                      result.append(f"\n! --- Раздел: {s.lstrip('# ').strip()} ---")
+                      print(f"Обрабатываю раздел: {s}")
                   else:
                       active = False
               
-              # Если мы внутри нужного раздела и это строка с IP (0.0.0.0 domain)
+              # Если мы в активном разделе и это строка с данными (IP Domain)
               if active and not s.startswith("#"):
                   parts = s.split()
+                  # Проверяем, что в строке есть минимум IP и Домен
                   if len(parts) >= 2:
+                      ip = parts[0]
                       domain = parts[1].lower()
-                      if domain not in unique_domains:
-                          # ФОРМАТ БЕЛОГО СПИСКА: @@||domain^
-                          result.append(f"@@||{domain}^")
-                          unique_domains.add(domain)
+                      
+                      # Игнорируем заглушки 0.0.0.0 или 127.0.0.1, если они попадутся
+                      if ip not in ["0.0.0.0", "127.0.0.1"]:
+                          # Формат: ||domain.com^$dnsrewrite=IP
+                          rule = f"||{domain}^$dnsrewrite={ip}"
+                          result.append(rule)
+                          count += 1
 
-          if not result:
-              print("!!! ОШИБКА: Домены не найдены.")
+          if count == 0:
+              print("!!! ОШИБКА: Домены не найдены. Проверьте ключевые слова.")
               exit(1)
 
-          # Запись в файл
+          # Запись итогового файла
           with open(output_file, "w", encoding="utf-8") as f:
-              f.write("! Title: My Custom AI & Google Whitelist\n")
-              f.write("! Description: Only OpenAI, Google, Grok, Claude\n")
-              f.write(f"! Total domains: {len(result)}\n\n")
+              f.write("! Title: My AI & Google DNS Rewrite\n")
+              f.write(f"! Total rules: {count}\n\n")
               f.write("\n".join(result))
           
-          print(f"Успех! Сгенерировано {len(result)} правил для белого списка.")
+          print(f"Успех! Сгенерировано {count} правил DNS Rewrite.")
 
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add my_whitelist.txt
-          git commit -m "Update whitelist: $(date)" || exit 0
+          git add my_filters.txt
+          git commit -m "Update rewrite filters: $(date)" || exit 0
           git push origin main --force
