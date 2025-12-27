@@ -1,0 +1,90 @@
+name: Update Whitelist
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Process Whitelist
+        shell: python
+        run: |
+          import requests
+          
+          # Источник (hosts-файл)
+          source_url = "https://raw.githubusercontent.com/ImMALWARE/dns.malw.link/refs/heads/master/hosts"
+          # Сервисы для белого списка
+          target_keywords = ["OpenAI", "Google", "Grok", "Claude"]
+          output_file = "my_whitelist.txt"
+          
+          print(f"Загружаю данные из {source_url}...")
+          r = requests.get(source_url)
+          if r.status_code != 200:
+              print(f"Ошибка загрузки: {r.status_code}")
+              exit(1)
+          
+          lines = r.text.splitlines()
+          result = []
+          active = False
+          unique_domains = set() # Чтобы не было дублей
+          
+          print(f"Всего строк в источнике: {len(lines)}")
+          print("--- Начинаю поиск разделов ---")
+
+          for line in lines:
+              s = line.strip()
+              if not s: continue
+              
+              # Поиск заголовков в hosts (начинаются с #)
+              if s.startswith("#"):
+                  found_keyword = None
+                  for k in target_keywords:
+                      if k.lower() in s.lower():
+                          found_keyword = k
+                          break
+                  
+                  if found_keyword:
+                      active = True
+                      print(f"Включен захват для раздела: {s}")
+                  else:
+                      active = False
+              
+              # Если мы внутри нужного раздела и это строка с IP (0.0.0.0 domain)
+              if active and not s.startswith("#"):
+                  parts = s.split()
+                  if len(parts) >= 2:
+                      domain = parts[1].lower()
+                      if domain not in unique_domains:
+                          # ФОРМАТ БЕЛОГО СПИСКА: @@||domain^
+                          result.append(f"@@||{domain}^")
+                          unique_domains.add(domain)
+
+          if not result:
+              print("!!! ОШИБКА: Домены не найдены.")
+              exit(1)
+
+          # Запись в файл
+          with open(output_file, "w", encoding="utf-8") as f:
+              f.write("! Title: My Custom AI & Google Whitelist\n")
+              f.write("! Description: Only OpenAI, Google, Grok, Claude\n")
+              f.write(f"! Total domains: {len(result)}\n\n")
+              f.write("\n".join(result))
+          
+          print(f"Успех! Сгенерировано {len(result)} правил для белого списка.")
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add my_whitelist.txt
+          git commit -m "Update whitelist: $(date)" || exit 0
+          git push origin main --force
